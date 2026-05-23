@@ -25,6 +25,12 @@ import java.util.*;
 @WebServlet(name = "MovieListServlet", urlPatterns = "/api/movie-list")
 public class MovieListServlet extends HttpServlet {
     private static final long serialVersionUID = 1L;
+    private static final int DEFAULT_RESULTS_PER_PAGE = 10;
+    private static final int MAX_RESULTS_PER_PAGE = 100;
+    private static final Map<String, String> SORT_COLUMNS = Map.of(
+            "title", "m.title",
+            "rating", "r.rating"
+    );
 
     // Create a dataSource which registered in web.
     private DataSource dataSource;
@@ -56,16 +62,14 @@ public class MovieListServlet extends HttpServlet {
         String star_name = request.getParameter("star_name");
         String browse_letter = request.getParameter("browse_letter");
         String genre = request.getParameter("genre");
-        String results = request.getParameter("results");
-        String page = request.getParameter("page");
-        String order = request.getParameter("order").toUpperCase();
-        String order2 = request.getParameter("order2").toUpperCase();
-        String first_selection = request.getParameter("first_selection");
-        String second_selection = request.getParameter("second_selection");
+        int resultsPerPage = parsePositiveInt(request.getParameter("results"), DEFAULT_RESULTS_PER_PAGE, MAX_RESULTS_PER_PAGE);
+        int pageNumber = parsePositiveInt(request.getParameter("page"), 1, Integer.MAX_VALUE / resultsPerPage);
 
-        // Default values for null parameters
-        if (results == null) results = "10";
-        if (page == null) page = "1";
+        // Whitelist dynamic SQL fragments because column names and directions cannot be bound as placeholders.
+        String order = getSortDirection(request.getParameter("order"));
+        String order2 = getSortDirection(request.getParameter("order2"));
+        String first_selection = getSortColumn(request.getParameter("first_selection"));
+        String second_selection = getSortColumn(request.getParameter("second_selection"));
 
         // Store parameters in session
         HashMap<String, String> movieListParams = new HashMap<>();
@@ -75,12 +79,12 @@ public class MovieListServlet extends HttpServlet {
         movieListParams.put("star_name", star_name);
         movieListParams.put("browse_letter", browse_letter);
         movieListParams.put("genre", genre);
-        movieListParams.put("results", results);
-        movieListParams.put("page", page);
+        movieListParams.put("results", String.valueOf(resultsPerPage));
+        movieListParams.put("page", String.valueOf(pageNumber));
         movieListParams.put("order", order);
         movieListParams.put("order2", order2);
-        movieListParams.put("first_selection", first_selection);
-        movieListParams.put("second_selection", second_selection);
+        movieListParams.put("first_selection", getSortSelection(request.getParameter("first_selection")));
+        movieListParams.put("second_selection", getSortSelection(request.getParameter("second_selection")));
 
         session.setAttribute("movieListParams", movieListParams);
 
@@ -89,8 +93,8 @@ public class MovieListServlet extends HttpServlet {
         request.getServletContext().log("getting year: " + year);
         request.getServletContext().log("getting director: " + director);
         request.getServletContext().log("getting star: " + star_name);
-        request.getServletContext().log("getting results" + results);
-        request.getServletContext().log("getting page" + page);
+        request.getServletContext().log("getting results" + resultsPerPage);
+        request.getServletContext().log("getting page" + pageNumber);
 
         // Output stream to STDOUT
         PrintWriter out = response.getWriter();
@@ -163,27 +167,14 @@ public class MovieListServlet extends HttpServlet {
 
             // Find what to plan query around
             System.out.println(first_selection + second_selection);
-            if (first_selection.equals("title")) {
-                query.append("ORDER BY m.title");
-            } else {
-                query.append("ORDER BY r.rating");
-            }
-
-            query.append(" ").append(order);
-
-            if (second_selection.equals("title")) {
-                query.append(", m.title");
-            } else {
-                query.append(", r.rating");
-            }
-
-            query.append(" ").append(order2);
-            query.append(" LIMIT ").append(results);
-            int resultsPerPage = Integer.parseInt(results);
-            int pageNumber = Integer.parseInt(page);
+            query.append("ORDER BY ").append(first_selection).append(" ").append(order);
+            query.append(", ").append(second_selection).append(" ").append(order2);
+            query.append(" LIMIT ? ");
             int offset = (pageNumber - 1) * resultsPerPage;
+            params.add(resultsPerPage);
+            params.add(offset);
 
-            query.append(" OFFSET ").append(offset);
+            query.append(" OFFSET ?");
 
             System.out.println(query);
             PreparedStatement statement = conn.prepareStatement(query.toString());
@@ -295,5 +286,43 @@ public class MovieListServlet extends HttpServlet {
 
         // Always remember to close db connection after usage. Here it's done by try-with-resources
 
+    }
+
+    private String getSortDirection(String direction) {
+        if (direction == null) {
+            return "ASC";
+        }
+
+        String normalizedDirection = direction.toUpperCase(Locale.ROOT);
+        if (normalizedDirection.equals("ASC") || normalizedDirection.equals("DESC")) {
+            return normalizedDirection;
+        }
+
+        return "ASC";
+    }
+
+    private String getSortSelection(String selection) {
+        if (selection == null || !SORT_COLUMNS.containsKey(selection)) {
+            return "title";
+        }
+
+        return selection;
+    }
+
+    private String getSortColumn(String selection) {
+        return SORT_COLUMNS.get(getSortSelection(selection));
+    }
+
+    private int parsePositiveInt(String value, int defaultValue, int maxValue) {
+        try {
+            int parsedValue = Integer.parseInt(value);
+            if (parsedValue < 1) {
+                return defaultValue;
+            }
+
+            return Math.min(parsedValue, maxValue);
+        } catch (Exception e) {
+            return defaultValue;
+        }
     }
 }
